@@ -1,81 +1,99 @@
-import asyncio
+import os
 import time
-from fastapi import FastAPI, HTTPException, Request, Body
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from .models import Event
+import asyncio
+import json
+from typing import Optional, List
+from fastapi import FastAPI, Request, HTTPException
+import aiofiles
+from .models import Event, Stats
 from .dedup_store import DedupStore
-from .consumer import Consumer
-import uvicorn
-from typing import List, Union
-import logging
+from .consumer import consumer_worker, process_pending
 
-logging.basicConfig(level=logging.INFO)
-app = FastAPI(title="UTS Aggregator")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-DB_PATH = "data/dedup.db"
-store = DedupStore(DB_PATH)
-queue: asyncio.Queue = asyncio.Queue()
+DB_PATH = os.getenv("DEDUP_DB", "/app/data/dedup.db")
+PROCESSED_DIR = os.getenv("PROCESSED_DIR", "/app/data/processed")
+WORKERS = int(os.getenv("WORKERS", "2"))
+
+app = FastAPI(title="UTS Aggregator System")
+
+queue: asyncio.Queue = asyncio.Queue(maxsize=10000)
+dedup_store = DedupStore(DB_PATH)
 
 stats = {
-    'received': 0,
-    'unique_processed': 0,
-    'duplicate_dropped': 0,
-    'topics': set(),
-    'start_time': time.time()
+    "received": 0,
+    "unique_processed": 0,
+    "duplicate_dropped": 0,
+    "topics": set(),
 }
-consumer = Consumer(queue, store, stats)
+start_time = time.time()
+
 
 @app.on_event("startup")
-async def startup_event():
-    # ensure data dir exists
-    import os
-    os.makedirs("data", exist_ok=True)
-    await consumer.start()
+async def startup():
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
+    await dedup_store.init()
+    app.state.workers = [
+        asyncio.create_task(consumer_worker(queue, dedup_store, PROCESSED_DIR, stats))
+        for _ in range(WORKERS)
+    ]
+    print(f"Started {WORKERS} consumer workers")
+
 
 @app.on_event("shutdown")
-async def shutdown_event():
-    await consumer.stop()
+async def shutdown():
+    for w in app.state.workers:
+        w.cancel()
+    await dedup_store.close()
+
 
 @app.post("/publish")
-async def publish(request: Request, payload: Union[dict, list] = Body(...)):
-    events = []
-    # accept single object or list
-    if isinstance(payload, list):
-        events = payload
-    elif isinstance(payload, dict):
-        events = [payload]
-    else:
-        raise HTTPException(status_code=400, detail="Invalid payload")
-
+async def publish(request: Request):
+    """Receive single or batch event JSON payload."""
+    body = await request.json()
+    events = body if isinstance(body, list) else [body]
     accepted = 0
-    for ev in events:
+    for e in events:
         try:
-            e = Event.parse_obj(ev)
+            event = Event(**e).dict()
+            await queue.put(event)
+            stats["received"] += 1
+            accepted += 1
         except Exception as ex:
-            raise HTTPException(status_code=400, detail=f"Invalid event schema: {ex}")
-        stats['received'] += 1
-        stats['topics'].add(e.topic)
-        await queue.put(e.dict())
-        accepted += 1
-    return JSONResponse({"accepted": accepted})
+            raise HTTPException(status_code=400, detail=str(ex))
+    return {"accepted": accepted, "received_total": stats["received"]}
+
 
 @app.get("/events")
-async def get_events(topic: str | None = None):
-    results = store.list_events(topic)
-    return JSONResponse(results)
+async def get_events(topic: Optional[str] = None):
+    """Return processed events (deduplicated)."""
+    result: List[dict] = []
+    topics = [topic] if topic else [
+        f[:-7] for f in os.listdir(PROCESSED_DIR) if f.endswith(".ndjson")
+    ]
+    for t in topics:
+        file_path = os.path.join(PROCESSED_DIR, f"{t}.ndjson")
+        if not os.path.exists(file_path):
+            continue
+        async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+            async for line in f:
+                try:
+                    result.append(json.loads(line))
+                except Exception:
+                    continue
+    return result
 
-@app.get("/stats")
+
+@app.get("/stats", response_model=Stats)
 async def get_stats():
-    uptime = time.time() - stats['start_time']
-    return JSONResponse({
-        'received': stats['received'],
-        'unique_processed': stats['unique_processed'],
-        'duplicate_dropped': stats['duplicate_dropped'],
-        'topics': list(stats['topics']),
-        'uptime_seconds': int(uptime)
-    })
+    """Expose runtime metrics for observability."""
+    return {
+        "received": stats["received"],
+        "unique_processed": stats["unique_processed"],
+        "duplicate_dropped": stats["duplicate_dropped"],
+        "topics": sorted(stats["topics"]),
+        "uptime_seconds": time.time() - start_time,
+    }
 
-if __name__ == '__main__':
-    uvicorn.run("src.main:app", host='0.0.0.0', port=8080)
+
+# For testing
+app.state.process_pending = process_pending
