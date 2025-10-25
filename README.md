@@ -18,24 +18,25 @@ Seluruh komponen dijalankan di dalam container menggunakan **Docker** agar teris
 
 ---
 
-## 🏗️ Arsitektur Sistem  
+## 🏗️ Arsitektur Sistem
 
-+-------------+ +--------------------+ +--------------------+
-| Publisher | -----> | Aggregator (API) | -----> | Async Queue |
-+-------------+ +--------------------+ +--------------------+
-│
-v
-+---------------+
-| Consumer(s) |
-| (async tasks) |
-+-------+-------+
-|
-v
-+--------------------+
-| Dedup Store (DB) |
-| SQLite persisted |
-+--------------------+
-
+```
++-------------+        +--------------------+        +--------------------+
+|  Publisher  | -----> |  Aggregator (API)  | -----> |   Async Queue      |
++-------------+        +--------------------+        +---------+----------+
+                                                           |
+                                                           v
+                                                    +--------------+
+                                                    |  Consumer(s) |
+                                                    | (async task) |
+                                                    +------+-------+
+                                                           |
+                                                           v
+                                               +---------------------------+
+                                               |  Dedup Store (DB)         |
+                                               |  SQLite persisted storage |
+                                               +---------------------------+
+```
 
 Komponen utama:
 - **Publisher:** mengirim event/log ke endpoint `/publish`.
