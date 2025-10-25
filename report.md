@@ -1,6 +1,8 @@
 # 🧩 Laporan UTS Sistem Paralel dan Terdistribusi  
-**Nama:** Dhede Kusuma Ramadhan 
+**Nama:** Dhede Kusuma Ramadhan
+
 **NIM:** 11221045  
+
 **Judul:** Implementasi *Pub-Sub Log Aggregator* dengan *Idempotent Consumer* Berbasis FastAPI dan Docker  
 
 ---
