@@ -220,22 +220,25 @@ Dalam pengujian, sistem memproses lebih dari 5.000 event (dengan 20% duplikasi) 
 ## 🧩 Bagian II — Implementasi dan Pembuktian
 
 ### **1. Arsitektur Sistem**
+## 🏗️ Arsitektur Sistem
 
+```
 +-------------+        +--------------------+        +--------------------+
-|  Publisher  | -----> |  Aggregator (API)  | -----> |  Async Queue       |
-+-------------+        +--------------------+        +--------------------+
-                                                    │
-                                                    v
-                                             +---------------+
-                                             |  Consumer(s)  |
-                                             | (async tasks) |
-                                             +-------+-------+
-                                                     |
-                                                     v
-                                           +--------------------+
-                                           | Dedup Store (DB)  |
-                                           |  SQLite persisted  |
-                                           +--------------------+
+|  Publisher  | -----> |  Aggregator (API)  | -----> |   Async Queue      |
++-------------+        +--------------------+        +---------+----------+
+                                                           |
+                                                           v
+                                                    +--------------+
+                                                    |  Consumer(s) |
+                                                    | (async task) |
+                                                    +------+-------+
+                                                           |
+                                                           v
+                                               +---------------------------+
+                                               |  Dedup Store (DB)         |
+                                               |  SQLite persisted storage |
+                                               +---------------------------+
+```
 
 
 
