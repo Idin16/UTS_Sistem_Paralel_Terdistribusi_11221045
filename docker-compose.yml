@@ -1,10 +1,56 @@
-version: "3.8"
+# Docker Compose untuk Pub-Sub Log Aggregator
+# Bonus: Menjalankan publisher dan aggregator dalam service terpisah
+
+version: '3.8'
+
 services:
+  # Service Aggregator (Consumer + API)
   aggregator:
-    image: uts-aggregator:latest
-    build: .
-    container_name: uts_aggregator
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pubsub-aggregator
     ports:
       - "8080:8080"
     volumes:
+      # Persistent storage untuk SQLite database
       - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=INFO
+    networks:
+      - pubsub-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # Service Publisher (Optional - untuk testing)
+  # Bisa digunakan untuk mengirim event secara otomatis
+  publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pubsub-publisher
+    depends_on:
+      - aggregator
+    environment:
+      - AGGREGATOR_URL=http://aggregator:8080
+      - PYTHONUNBUFFERED=1
+    networks:
+      - pubsub-network
+    # Override command untuk menjalankan publisher script
+    command: ["python", "-c", "print('Publisher service - gunakan untuk testing')"]
+    restart: "no"
+
+networks:
+  pubsub-network:
+    driver: bridge
+    internal: false  # Set true jika ingin isolasi penuh (tidak ada akses eksternal)
+
+volumes:
+  data:
+    driver: local

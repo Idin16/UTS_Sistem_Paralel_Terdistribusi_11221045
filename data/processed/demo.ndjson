@@ -1,1 +1,0 @@
-{"topic": "demo", "event_id": "evtX", "timestamp": "2025-10-25T12:00:00", "source": "compose", "payload": {"msg": "hello from compose"}}

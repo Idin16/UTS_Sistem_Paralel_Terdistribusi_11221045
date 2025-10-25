@@ -1,0 +1,1 @@
+{"topic": "user.logout", "event_id": "evt2", "timestamp": "2025-10-25T12:30:00", "source": "duplicate_test", "payload": {"msg": "User Keluar"}}

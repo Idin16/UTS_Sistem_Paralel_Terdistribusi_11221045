@@ -12,9 +12,6 @@ Sistem terdistribusi memiliki karakteristik utama berupa *concurrency*, *scalabi
 Dalam konteks *log aggregator*, desain ini menghadirkan *trade-off* antara *latency* dan *reliability*: semakin tinggi jaminan keandalan (*exactly-once semantics*), semakin besar pula kompleksitas dan overhead pada sistem. Oleh karena itu, pendekatan *at-least-once delivery* sering dipilih untuk menyeimbangkan performa dan konsistensi.  
 Konsep ini sesuai dengan pembahasan Coulouris et al. (2012, Bab 1) dan Tanenbaum & Van Steen (2023, Bab 1) mengenai karakteristik desentralisasi serta isu heterogenitas dalam sistem terdistribusi.  
 
-📚 *Referensi:*  
-Coulouris, G., Dollimore, J., Kindberg, T., & Blair, G. (2012). *Distributed Systems: Concepts and Design* (5th ed.). Pearson.  
-Tanenbaum, A. S., & Van Steen, M. (2023). *Distributed Systems* (4th ed.). Springer.  
 
 ---
 
@@ -39,6 +36,113 @@ Dalam sistem terdistribusi, *delivery semantics* menentukan bagaimana pesan diki
 - *Exactly-once* menjamin setiap pesan hanya diproses satu kali, tetapi memerlukan protokol kompleks dan overhead tinggi.  
 Sistem aggregator ini menggunakan *at-least-once* dengan *idempotent consumer*, sehingga duplikasi tidak menimbulkan efek negatif. *Idempotent consumer* memastikan pemrosesan yang sama tidak menyebabkan perubahan status berulang.  
 Coulouris (2012, Bab 3) menjelaskan pentingnya idempoten terhadap *retries*, sedangkan Tanenbaum (2023) menegaskan bahwa *idempotency* menjadi dasar kestabilan *stream processor* modern.  
+
+```
+import asyncio
+import logging
+import aiofiles
+import os
+import json
+
+
+class Consumer:
+    """Consumer utama untuk memproses event dari queue dengan deduplication."""
+    def __init__(self, queue, store=None, stats=None):
+        self.queue = queue
+        self.store = store
+        self.stats = stats or {
+            "unique_processed": 0,
+            "duplicate_dropped": 0,
+            "topics": set(),
+        }
+        self._task = None
+        self._running = False
+
+    async def start(self):
+        logging.info("Consumer started")
+        self._running = True
+        self._task = asyncio.create_task(self.run())
+
+    async def stop(self):
+        logging.info("Stopping consumer...")
+        self._running = False
+        if self._task:
+            await self._task
+
+    async def run(self):
+        """Loop utama untuk memproses event dari queue."""
+        while self._running:
+            event = await self.queue.get()
+            try:
+                topic, eid = event["topic"], event["event_id"]
+                if self.store.is_duplicate(topic, eid):
+                    self.stats["duplicate_dropped"] += 1
+                    logging.info(f"[DUPLICATE] {topic}:{eid}")
+                else:
+                    self.store.save_event(event)
+                    self.stats["unique_processed"] += 1
+                    self.stats["topics"].add(topic)
+                    logging.info(f"[PROCESSED] {topic}:{eid}")
+            except Exception as e:
+                logging.error(f"Consumer error: {e}")
+            finally:
+                self.queue.task_done()
+
+
+# 🔹 Fungsi async tambahan (dipakai manual/test)
+async def append_processed(processed_dir: str, topic: str, event: dict):
+    os.makedirs(processed_dir, exist_ok=True)
+    file_path = os.path.join(processed_dir, f"{topic}.ndjson")
+    async with aiofiles.open(file_path, "a", encoding="utf-8") as f:
+        await f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+async def consumer_worker(queue: asyncio.Queue, dedup_store, processed_dir: str, stats: dict):
+    """Versi worker untuk testing/manual"""
+    while True:
+        event = await queue.get()
+        try:
+            topic, eid = event["topic"], event["event_id"]
+            if await dedup_store.exists(topic, eid):
+                stats["duplicate_dropped"] += 1
+                print(f"[DUPLICATE] {topic}:{eid}")
+            else:
+                await dedup_store.mark(topic, eid)
+                await append_processed(processed_dir, topic, event)
+                stats["unique_processed"] += 1
+                stats["topics"].add(topic)
+                print(f"[PROCESSED] {topic}:{eid}")
+        except Exception as e:
+            print("Consumer error:", e)
+        finally:
+            queue.task_done()
+
+
+async def process_pending(queue, dedup_store, processed_dir, stats):
+    """Drain queue secara manual (untuk debug/test)."""
+    while not queue.empty():
+        event = await queue.get()
+        try:
+            topic, eid = event["topic"], event["event_id"]
+            if await dedup_store.exists(topic, eid):
+                stats["duplicate_dropped"] += 1
+                print(f"[DUPLICATE] {topic}:{eid}")
+            else:
+                await dedup_store.mark(topic, eid)
+                await append_processed(processed_dir, topic, event)
+                stats["unique_processed"] += 1
+                stats["topics"].add(topic)
+                print(f"[PROCESSED] {topic}:{eid}")
+        except Exception as e:
+            print("Consumer error:", e)
+        finally:
+            queue.task_done()
+
+
+# 🔹 Alias agar test lama tetap bisa jalan
+EventConsumer = Consumer
+
+```
 
 ---
 
@@ -157,9 +261,7 @@ Sistem terdiri atas dua komponen utama:
 
 ---
 
-### **3. Bukti Pengujian**
-#### a. Mengirim Event
-```bash
-curl -X POST http://localhost:8080/publish \
-  -H "Content-Type: application/json" \
-  -d '{"topic":"demo","event_id":"evtX","timestamp":"2025-10-25T12:00:00","source":"compose","payload":{"msg":"hello from compose"}}'
+### 📚 *Referensi:*  
+Coulouris, G., Dollimore, J., Kindberg, T., & Blair, G. (2012). *Distributed Systems: Concepts and Design* (5th ed.). Pearson.  
+Tanenbaum, A. S., & Van Steen, M. (2023). *Distributed Systems* (4th ed.). Springer.  
+
